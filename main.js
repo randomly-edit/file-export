@@ -48,16 +48,19 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     function getInitialData() {
-        const hashData = window.location.hash;
-        if (hashData && hashData.startsWith('?data=')) {
+        const searchParams = new URLSearchParams(window.location.search);
+        const data = searchParams.get('data');
+
+        if (data) {
             try {
-                const encodedData = hashData.substring(6);
-                const decodedData = atob(encodedData);
+                const decodedData = atob(data);
                 const parsedData = JSON.parse(decodedData);
-                window.location.hash = ''; // Clean the URL
+                // Clean the URL
+                const newUrl = window.location.origin + window.location.pathname;
+                window.history.replaceState({}, document.title, newUrl);
                 return migrateData(parsedData).data;
             } catch (e) {
-                console.error("Error parsing data from hash:", e);
+                console.error("Error parsing data from query param:", e);
             }
         }
 
@@ -383,7 +386,7 @@ document.addEventListener('DOMContentLoaded', () => {
             const url = new URL(inputText);
 
             // Check if it's a shareable link from the same app
-            if (url.origin === window.location.origin && url.hash.startsWith('#data=')) {
+            if (url.origin === window.location.origin && url.searchParams.has('data')) {
                 window.location.href = inputText;
                 return;
             }
@@ -407,7 +410,7 @@ document.addEventListener('DOMContentLoaded', () => {
         const dataToShare = { version: DB_VERSION, data: fsData };
         const dataStr = JSON.stringify(dataToShare);
         const encodedData = btoa(dataStr);
-        const shareableLink = `${window.location.origin}${window.location.pathname}#data=${encodedData}`;
+        const shareableLink = `${window.location.origin}${window.location.pathname}?data=${encodedData}`;
         shareLinkInput.value = shareableLink;
         showModal(shareLinkModal);
     });
@@ -430,3 +433,4 @@ document.addEventListener('DOMContentLoaded', () => {
     // Initial Load
     navigateTo(currentPath);
 });
+
