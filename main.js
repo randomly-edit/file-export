@@ -8,6 +8,7 @@ document.addEventListener('DOMContentLoaded', () => {
     const addressBar = document.getElementById('address-bar');
     const backButton = document.getElementById('back-button');
     const forwardButton = document.getElementById('forward-button');
+    const selectAllCheckbox = document.getElementById('select-all-checkbox');
 
     // Modals
     const tutorialModal = document.getElementById('tutorial-modal');
@@ -32,6 +33,7 @@ document.addEventListener('DOMContentLoaded', () => {
     // State Management
     let fsData = getInitialData();
     let selectedItem = null;
+    let selectedItems = new Set();
     let currentPath = []; // Array of folder IDs, [] is root
     let history = [[]];
     let historyIndex = 0;
@@ -96,6 +98,7 @@ document.addEventListener('DOMContentLoaded', () => {
             history.push(path);
             historyIndex++;
         }
+        selectedItems.clear();
         saveAndRender();
         updateNavButtons();
     }
@@ -125,7 +128,16 @@ document.addEventListener('DOMContentLoaded', () => {
         const currentFolderContents = getFolderContents(currentPath);
         currentFolderContents.forEach(item => {
             const element = document.createElement('div');
-            element.classList.add(item.type);
+            element.classList.add(item.type, 'file-system-item');
+
+            const checkbox = document.createElement('input');
+            checkbox.type = 'checkbox';
+            checkbox.checked = selectedItems.has(item.id);
+            checkbox.addEventListener('click', (e) => {
+                e.stopPropagation();
+                toggleSelection(item.id);
+            });
+
             const icon = document.createElement('i');
             icon.className = 'material-icons';
 
@@ -149,8 +161,10 @@ document.addEventListener('DOMContentLoaded', () => {
                 element.appendChild(extSpan);
             }
             element.prepend(icon);
+            element.prepend(checkbox);
 
-            element.addEventListener('click', (e) => {
+            element.addEventListener('contextmenu', (e) => {
+                e.preventDefault();
                 e.stopPropagation();
                 selectedItem = item;
                 showContextMenu(e.pageX, e.pageY);
@@ -161,6 +175,7 @@ document.addEventListener('DOMContentLoaded', () => {
             fileSystem.appendChild(element);
         });
         updateAddressBar();
+        updateSelectAllCheckbox();
     }
 
     function updateAddressBar() {
@@ -176,6 +191,26 @@ document.addEventListener('DOMContentLoaded', () => {
 
     // --- Context Menu ---
     function showContextMenu(x, y) {
+        contextMenu.innerHTML = ''; // Clear existing items
+
+        const actions = [
+            { label: 'Edit', action: 'edit' },
+            { label: 'Rename', action: 'rename' },
+            { label: 'Move To...', action: 'move-to' },
+            { label: 'Delete', action: 'delete' },
+        ];
+
+        if (selectedItem && selectedItem.type === 'file' && selectedItem.name.endsWith('.zip')) {
+            actions.push({ label: 'Unzip', action: 'unzip' });
+        }
+
+        actions.forEach(({ label, action }) => {
+            const li = document.createElement('li');
+            li.textContent = label;
+            li.dataset.action = action;
+            contextMenu.appendChild(li);
+        });
+
         contextMenu.style.display = 'block';
         contextMenu.style.left = `${x}px`;
         contextMenu.style.top = `${y}px`;
@@ -215,8 +250,46 @@ document.addEventListener('DOMContentLoaded', () => {
             case 'move-to':
                 openMoveToModal(selectedItem);
                 break;
+            case 'unzip':
+                unzipFile(selectedItem);
+                break;
         }
     }
+
+    // --- Selection ---
+    function toggleSelection(itemId) {
+        if (selectedItems.has(itemId)) {
+            selectedItems.delete(itemId);
+        } else {
+            selectedItems.add(itemId);
+        }
+        saveAndRender();
+    }
+
+    function updateSelectAllCheckbox() {
+        const currentFolderContents = getFolderContents(currentPath);
+        if (currentFolderContents.length === 0) {
+            selectAllCheckbox.checked = false;
+            selectAllCheckbox.indeterminate = false;
+            return;
+        }
+
+        const allSelected = currentFolderContents.every(item => selectedItems.has(item.id));
+        const someSelected = currentFolderContents.some(item => selectedItems.has(item.id));
+
+        selectAllCheckbox.checked = allSelected;
+        selectAllCheckbox.indeterminate = !allSelected && someSelected;
+    }
+
+    selectAllCheckbox.addEventListener('change', () => {
+        const currentFolderContents = getFolderContents(currentPath);
+        if (selectAllCheckbox.checked) {
+            currentFolderContents.forEach(item => selectedItems.add(item.id));
+        } else {
+            currentFolderContents.forEach(item => selectedItems.delete(item.id));
+        }
+        saveAndRender();
+    });
 
     // --- Modals ---
     function showModal(modal) { modal.classList.add('show'); }
@@ -325,7 +398,7 @@ document.addEventListener('DOMContentLoaded', () => {
         saveAndRender();
     });
     document.getElementById('show-tutorial').addEventListener('click', () => showModal(tutorialModal));
-    document.getElementById('export-data').addEventListener('click', () => {
+    document.getElementById('export-db').addEventListener('click', () => {
         const dataToExport = { version: DB_VERSION, data: fsData };
         const dataStr = JSON.stringify(dataToExport, null, 2);
         const link = document.createElement('a');
@@ -333,25 +406,119 @@ document.addEventListener('DOMContentLoaded', () => {
         link.download = 'filesystem.json';
         link.click();
     });
-    document.getElementById('import-data').addEventListener('click', () => {
+
+    document.getElementById('import-files').addEventListener('click', () => {
         const input = document.createElement('input');
         input.type = 'file';
-        input.accept = '.json';
+        input.multiple = true;
         input.onchange = e => {
-            const file = e.target.files[0];
-            if (!file) return;
-            const reader = new FileReader();
-            reader.onload = event => {
-                try {
-                    const parsedData = JSON.parse(event.target.result);
-                    fsData = migrateData(parsedData).data;
-                    navigateTo([]);
-                } catch (error) { alert('Error: Could not parse JSON file.'); }
-            };
-            reader.readAsText(file);
+            const files = e.target.files;
+            if (!files.length) return;
+
+            for (const file of files) {
+                const reader = new FileReader();
+                reader.onload = event => {
+                    getFolderContents(currentPath).push({
+                        id: Date.now() + Math.random(),
+                        type: 'file',
+                        name: file.name,
+                        content: event.target.result
+                    });
+                    saveAndRender();
+                };
+                reader.readAsText(file);
+            }
         };
         input.click();
     });
+
+
+    document.getElementById('export-selected').addEventListener('click', async () => {
+        const currentFolderContents = getFolderContents(currentPath);
+        const selectedToExport = currentFolderContents.filter(item => selectedItems.has(item.id));
+
+        if (selectedToExport.length === 0) {
+            alert("No items selected for export.");
+            return;
+        }
+
+        if (selectedToExport.length === 1) {
+            const item = selectedToExport[0];
+            if (item.type === 'file') {
+                const blob = new Blob([item.content], { type: 'text/plain' });
+                const link = document.createElement('a');
+                link.href = URL.createObjectURL(blob);
+                link.download = item.name;
+                link.click();
+            } else { // It's a folder
+                const zip = new JSZip();
+                addFolderToZip(zip, item);
+                const content = await zip.generateAsync({ type: "blob" });
+                const link = document.createElement('a');
+                link.href = URL.createObjectURL(content);
+                link.download = `${item.name}.zip`;
+                link.click();
+            }
+        } else {
+            const zip = new JSZip();
+            for (const item of selectedToExport) {
+                if (item.type === 'file') {
+                    zip.file(item.name, item.content);
+                } else {
+                    const folderZip = zip.folder(item.name);
+                    addFolderToZip(folderZip, item);
+                }
+            }
+            const content = await zip.generateAsync({ type: "blob" });
+            const link = document.createElement('a');
+            link.href = URL.createObjectURL(content);
+            link.download = "export.zip";
+            link.click();
+        }
+    });
+
+    function addFolderToZip(zip, folder) {
+        folder.children.forEach(item => {
+            if (item.type === 'file') {
+                zip.file(item.name, item.content);
+            } else {
+                const subFolderZip = zip.folder(item.name);
+                addFolderToZip(subFolderZip, item);
+            }
+        });
+    }
+
+    async function unzipFile(file) {
+        try {
+            const zip = await JSZip.loadAsync(file.content);
+            const newFolderName = file.name.replace('.zip', '');
+            const newFolder = {
+                id: Date.now(),
+                type: 'folder',
+                name: newFolderName,
+                children: []
+            };
+
+            for (const filename in zip.files) {
+                const zipEntry = zip.files[filename];
+                const content = await zipEntry.async('string');
+                if (!zipEntry.dir) {
+                    newFolder.children.push({
+                        id: Date.now() + Math.random(),
+                        type: 'file',
+                        name: filename,
+                        content: content
+                    });
+                }
+            }
+            getFolderContents(currentPath).push(newFolder);
+            saveAndRender();
+        } catch (e) {
+            console.error("Error unzipping file:", e);
+            alert("Failed to unzip the file. It might be corrupted or not a valid zip file.");
+        }
+    }
+
 
     document.getElementById('check-data').addEventListener('click', () => {
         const dataToExport = { version: DB_VERSION, data: fsData };
